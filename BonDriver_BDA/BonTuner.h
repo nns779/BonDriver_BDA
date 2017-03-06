@@ -10,7 +10,7 @@
 #include <list>
 #include <vector>
 #include <map>
-#include <queue>
+#include <deque>
 
 #include "IBonDriver2.h"
 #include "IBdaSpecials2.h"
@@ -396,17 +396,15 @@ protected:
 
 	struct DecodeProc {
 		HANDLE hThread;					// スレッドハンドル
-		HANDLE hTerminateRequest;		// スレッド終了要求
+		LONG lTerminateFlag;
 		DecodeProc(void)
 			: hThread(NULL),
-			hTerminateRequest(NULL)
+			lTerminateFlag(0)
 		{
-			hTerminateRequest = ::CreateEvent(NULL, FALSE, FALSE, NULL);
 		};
 		~DecodeProc(void)
 		{
-			::CloseHandle(hTerminateRequest);
-			hTerminateRequest = NULL;
+			lTerminateFlag = 0;
 		};
 	};
 	DecodeProc m_aDecodeProc;
@@ -699,7 +697,7 @@ protected:
 	CRITICAL_SECTION m_csDecodedTSBuff;
 
 	// 受信イベント
-	HANDLE m_hOnStreamEvent;
+	LONG m_lStreamFlag;
 
 	// デコードイベント
 	HANDLE m_hOnDecodeEvent;
@@ -708,51 +706,84 @@ protected:
 	struct TS_DATA {
 		BYTE* pbyBuff;
 		DWORD dwSize;
+		DWORD dwBuffSize;
+		bool bAlloc;
 		TS_DATA(void)
 			: pbyBuff(NULL),
-			  dwSize(0)
+			  dwSize(0),
+			  dwBuffSize(0),
+			  bAlloc(false)
 		{
 		};
-		TS_DATA(BYTE* data, DWORD size, BOOL copy = FALSE)
+		TS_DATA(BYTE* buff, DWORD size)
+			: dwSize(0)
 		{
-			if (copy) {
-				pbyBuff = new BYTE[size];
-				memcpy(pbyBuff, data, size);
+			if (buff) {
+				pbyBuff = buff;
+				bAlloc = false;
 			}
 			else {
-				pbyBuff = data;
+				pbyBuff = new BYTE[size];
+				bAlloc = true;
 			}
-			dwSize = size;
+			dwBuffSize = size;
 		};
 		~TS_DATA(void) {
-			SAFE_DELETE_ARRAY(pbyBuff);
+			if (bAlloc) {
+				SAFE_DELETE_ARRAY(pbyBuff);
+			}
+		};
+		void Expand(BYTE* buff, DWORD size)
+		{
+			if (bAlloc) {
+				SAFE_DELETE_ARRAY(pbyBuff);
+			}
+			if (buff) {
+				pbyBuff = buff;
+				bAlloc = false;
+			}
+			else {
+				pbyBuff = new BYTE[size];
+				bAlloc = true;
+			}
+			dwSize = 0;
+			dwBuffSize = size;
+		}
+		DWORD Put(BYTE* data, DWORD size)
+		{
+			DWORD copysize;
+			copysize = (dwBuffSize - dwSize > size) ? size : dwBuffSize - dwSize;
+			memcpy(pbyBuff + dwSize, data, copysize);
+			dwSize += copysize;
+			return copysize;
 		};
 	};
 
 	class TS_BUFF {
 	private:
-		std::queue<TS_DATA *> List;
-		BYTE *TempBuff;
-		DWORD TempOffset;
+		std::deque<TS_DATA *> TsBuff;
+		std::deque<TS_DATA *> FreeBuff;
+		TS_DATA *BufferingItem;
+		BYTE *Buff;
 		DWORD BuffSize;
+		DWORD Count;
 		DWORD MaxCount;
 		CRITICAL_SECTION cs;
 	public:
 		TS_BUFF(void);
 		~TS_BUFF(void);
 		void SetSize(DWORD dwBuffSize, DWORD dwMaxCount);
-		void Purge(void);
-		void Add(TS_DATA *pItem);
+		void Purge(bool clear = false);
 		BOOL AddData(BYTE *pbyData, DWORD dwSize);
 		TS_DATA * Get(void);
-		size_t Size(void);
+		void Free(TS_DATA *ts);
 	};
 
 	// 受信TSデータバッファ
 	TS_BUFF m_TsBuff;
 
 	// Decode処理の終わったTSデータバッファ
-	TS_BUFF m_DecodedTsBuff;
+	std::deque<TS_DATA *> m_DecodedTsBuff;
 
 	// GetTsStreamで参照されるバッファ
 	TS_DATA* m_LastBuff;
