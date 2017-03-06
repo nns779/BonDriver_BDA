@@ -509,7 +509,7 @@ const DWORD CBonTuner::GetReadyCount(void)
 {
 	DWORD dw;
 	::EnterCriticalSection(&m_csDecodedTSBuff);
-	dw = m_DecodedTsBuff.size();
+	dw = (DWORD)m_DecodedTsBuff.size();
 	::LeaveCriticalSection(&m_csDecodedTSBuff);
 	return dw;
 }
