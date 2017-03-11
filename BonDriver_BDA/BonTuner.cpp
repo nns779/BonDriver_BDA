@@ -3789,7 +3789,7 @@ CBonTuner::TS_BUFF::TS_BUFF(void)
 	BuffSize(0),
 	Count(0),
 	MaxCount(0),
-	MinCount(0),
+	MinCount(0)
 {
 	::InitializeCriticalSection(&cs);
 }
