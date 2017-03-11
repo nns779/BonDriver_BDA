@@ -545,6 +545,9 @@ protected:
 	// 最大バッファ数
 	DWORD m_dwMaxBuffCount;
 
+	// 最小バッファ数
+	DWORD m_dwMinBuffCount;
+
 	// m_hOnDecodeEventをセットするデータバッファ個数
 	unsigned int m_nWaitTsCount;
 
@@ -764,16 +767,16 @@ protected:
 		std::deque<TS_DATA *> TsBuff;
 		std::deque<TS_DATA *> FreeBuff;
 		TS_DATA *BufferingItem;
-		BYTE *Buff;
 		DWORD BuffSize;
 		DWORD Count;
 		DWORD MaxCount;
+		DWORD MinCount;
 		CRITICAL_SECTION cs;
 	public:
 		TS_BUFF(void);
 		~TS_BUFF(void);
-		void SetSize(DWORD dwBuffSize, DWORD dwMaxCount);
-		void Purge(bool clear = false);
+		void SetSize(DWORD dwBuffSize, DWORD dwMaxCount, DWORD dwMinCount);
+		void Purge();
 		BOOL AddData(BYTE *pbyData, DWORD dwSize);
 		TS_DATA * Get(void);
 		void Free(TS_DATA *ts);

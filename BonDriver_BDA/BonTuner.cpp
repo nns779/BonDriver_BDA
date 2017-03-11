@@ -157,6 +157,7 @@ CBonTuner::CBonTuner()
 	m_bSignalLockedJudgeTypeTuner(FALSE),
 	m_dwBuffSize(188 * 1024),
 	m_dwMaxBuffCount(512),
+	m_dwMinBuffCount(32),
 	m_nWaitTsCount(1),
 	m_nWaitTsSleep(100),
 	m_bAlwaysAnswerLocked(FALSE),
@@ -206,7 +207,7 @@ CBonTuner::CBonTuner()
 
 	ReadIniFile();
 
-	m_TsBuff.SetSize(m_dwBuffSize, m_dwMaxBuffCount);
+	m_TsBuff.SetSize(m_dwBuffSize, m_dwMaxBuffCount, m_dwMinBuffCount);
 
 	// COM処理専用スレッド起動
 	m_aCOMProc.hThread = ::CreateThread(NULL, 0, CBonTuner::COMProcThread, this, 0, NULL);
@@ -561,9 +562,6 @@ const BOOL CBonTuner::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain
 
 void CBonTuner::PurgeTsStream(void)
 {
-	// 受信TSバッファ
-	m_TsBuff.Purge();
-
 	// デコード後TSバッファ
 	m_TsBuff.Free(m_LastBuff);
 	m_LastBuff = NULL;
@@ -576,6 +574,9 @@ void CBonTuner::PurgeTsStream(void)
 		m_TsBuff.Free(ts);
 	}
 	::LeaveCriticalSection(&m_csDecodedTSBuff);
+
+	// 受信TSバッファ
+	m_TsBuff.Purge();
 
 	// ビットレート計算用クラス
 	m_BitRate.Clear();
@@ -1350,6 +1351,9 @@ void CBonTuner::ReadIniFile(void)
 
 	// ストリームデータバッファの最大個数
 	m_dwMaxBuffCount = ::GetPrivateProfileIntW(L"BONDRIVER", L"MaxBuffCount", 512, m_szIniFilePath);
+
+	// ストリームデータバッファの最小個数
+	m_dwMinBuffCount = ::GetPrivateProfileIntW(L"BONDRIVER", L"MinBuffCount", 32, m_szIniFilePath);
 
 	// WaitTsStream時、指定された個数分のストリームデータバッファが貯まるまで待機する
 	// チューナのCPU負荷が高いときは数値を大き目にすると効果がある場合もある
@@ -3782,74 +3786,45 @@ void CBonTuner::DisconnectAll(IBaseFilter* pFilter)
 
 CBonTuner::TS_BUFF::TS_BUFF(void)
 	: BufferingItem(NULL),
-	Buff(NULL),
 	BuffSize(0),
 	Count(0),
-	MaxCount(0)
+	MaxCount(0),
+	MinCount(0),
 {
 	::InitializeCriticalSection(&cs);
 }
 
 CBonTuner::TS_BUFF::~TS_BUFF(void)
 {
-	Purge(true);
-	SAFE_DELETE_ARRAY(Buff);
+	Purge();
 	::DeleteCriticalSection(&cs);
 }
 
-void CBonTuner::TS_BUFF::SetSize(DWORD dwBuffSize, DWORD dwMaxCount)
+void CBonTuner::TS_BUFF::SetSize(DWORD dwBuffSize, DWORD dwMaxCount, DWORD dwMinCount)
 {
-	Purge(true);
-	SAFE_DELETE_ARRAY(Buff);
-
-	if (dwBuffSize)
-	{
-		// バッファを一括で確保
-		Buff = new BYTE[dwBuffSize * dwMaxCount];
-
-		for (DWORD i = 0; i < dwMaxCount; i++)
-		{
-			TS_DATA *pItem = new TS_DATA(&Buff[i * dwBuffSize], dwBuffSize);
-			FreeBuff.push_back(pItem);
-		}
-
-		Count = dwMaxCount;
-	}
+	Purge();
 
 	BuffSize = dwBuffSize;
 	MaxCount = dwMaxCount;
+	MinCount = dwMinCount ? dwMinCount : dwMaxCount;
 }
 
-void CBonTuner::TS_BUFF::Purge(bool clear)
+void CBonTuner::TS_BUFF::Purge()
 {
 	::EnterCriticalSection(&cs);
 
-	if (!clear)
-	{
-		for (auto it = TsBuff.begin(); it != TsBuff.end(); it++) {
-			FreeBuff.push_front(*it);
-		}
-		TsBuff.clear();
-
-		if (BufferingItem) {
-			FreeBuff.push_front(BufferingItem);
-			BufferingItem = NULL;
-		}
+	for (auto it = TsBuff.begin(); it != TsBuff.end(); it++) {
+		SAFE_DELETE(*it);
 	}
-	else {
-		for (auto it = TsBuff.begin(); it != TsBuff.end(); it++) {
-			SAFE_DELETE(*it);
-		}
-		TsBuff.clear();
+	TsBuff.clear();
 
-		for (auto it = FreeBuff.begin(); it != FreeBuff.end(); it++) {
-			SAFE_DELETE(*it);
-		}
-		FreeBuff.clear();
-
-		SAFE_DELETE(BufferingItem);
-		Count = 0;
+	for (auto it = FreeBuff.begin(); it != FreeBuff.end(); it++) {
+		SAFE_DELETE(*it);
 	}
+	FreeBuff.clear();
+
+	SAFE_DELETE(BufferingItem);
+	Count = 0;
 
 	::LeaveCriticalSection(&cs);
 }
@@ -3889,6 +3864,11 @@ BOOL CBonTuner::TS_BUFF::AddData(BYTE *pbyData, DWORD dwSize)
 				break;
 			}
 		}
+		else {
+			// TS_DATAを作成
+			pItem = new TS_DATA(NULL, BuffSize ? BuffSize : dwSize);
+			Count++;
+		}
 
 		if (BuffSize != 0)
 		{
@@ -3911,12 +3891,7 @@ BOOL CBonTuner::TS_BUFF::AddData(BYTE *pbyData, DWORD dwSize)
 		{
 			// BuffSizeが指定されていない場合は上流から受け取ったサイズでそのまま追加
 
-			if (pItem == NULL) {
-				// TS_DATAを作成
-				pItem = new TS_DATA(NULL, dwSize);
-				Count++;
-			}
-			else if (pItem->dwBuffSize < dwSize) {
+			if (pItem->dwBuffSize < dwSize) {
 				// 容量の足りないTS_DATAを拡張
 				pItem->Expand(NULL, dwSize);
 			}
@@ -3951,7 +3926,13 @@ void CBonTuner::TS_BUFF::Free(CBonTuner::TS_DATA *ts)
 {
 	if (ts != NULL) {
 		::EnterCriticalSection(&cs);
-		FreeBuff.push_front(ts);
+		if (FreeBuff.size() > MinCount) {
+			delete ts;
+			Count--;
+		}
+		else {
+			FreeBuff.push_front(ts);
+		}
 		::LeaveCriticalSection(&cs);
 	}
 }
