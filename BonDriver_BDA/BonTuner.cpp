@@ -1353,7 +1353,8 @@ void CBonTuner::ReadIniFile(void)
 	m_dwMaxBuffCount = ::GetPrivateProfileIntW(L"BONDRIVER", L"MaxBuffCount", 512, m_szIniFilePath);
 
 	// ストリームデータバッファの最小個数
-	m_dwMinBuffCount = ::GetPrivateProfileIntW(L"BONDRIVER", L"MinBuffCount", 32, m_szIniFilePath);
+	// 0が指定された場合はMaxBuffCountと同じ値を用いる
+	m_dwMinBuffCount = ::GetPrivateProfileIntW(L"BONDRIVER", L"MinBuffCount", 0, m_szIniFilePath);
 
 	// WaitTsStream時、指定された個数分のストリームデータバッファが貯まるまで待機する
 	// チューナのCPU負荷が高いときは数値を大き目にすると効果がある場合もある
@@ -3926,7 +3927,7 @@ void CBonTuner::TS_BUFF::Free(CBonTuner::TS_DATA *ts)
 {
 	if (ts != NULL) {
 		::EnterCriticalSection(&cs);
-		if (FreeBuff.size() > MinCount) {
+		if (FreeBuff.size() >= MinCount) {
 			delete ts;
 			Count--;
 		}
